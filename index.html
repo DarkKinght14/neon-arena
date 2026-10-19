@@ -47,6 +47,7 @@
     font-size: 12px; padding: 3px 8px; border-radius: 4px; border: 1px solid currentColor;
     text-shadow: 0 0 8px currentColor; box-shadow: 0 0 8px currentColor inset; white-space: nowrap;
   }
+  .challenge { font-size: 13px; text-shadow: 0 0 10px currentColor; white-space: nowrap; }
 
   /* ---------- START / GAME OVER SCREENS ---------- */
   .overlay {
@@ -78,6 +79,14 @@
   button:hover { filter: brightness(1.15); }
   button:focus-visible { outline: 3px solid var(--text); outline-offset: 4px; }
   .hint { color: var(--dim); font-size: 12px; }
+
+  /* Mute button in the bottom-right corner, visible on every screen */
+  .mute {
+    position: fixed; right: 16px; bottom: 14px; z-index: 5;
+    font-size: 12px; padding: 6px 12px; letter-spacing: .1em;
+    background: rgba(5, 4, 15, .6); color: var(--dim); border: 1px solid #3a3f6a; box-shadow: none;
+  }
+  .mute:hover { color: var(--text); filter: none; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -93,6 +102,7 @@
     <div class="meter" id="dashBox"><span class="label" id="dashLabel">Dash [Shift]</span><div class="bar"><div class="fill" id="dashFill"></div></div></div>
   </div>
   <div class="middle">
+    <span class="challenge" id="challenge"></span>
     <span class="combo" id="combo"></span>
     <span id="effects" class="middle"></span>
   </div>
@@ -112,7 +122,9 @@
       <kbd>Shift</kbd> dash: a quick burst you can't be hit during<br>
       <kbd>Space</kbd> freeze enemies and bullets for 2 seconds<br>
       While frozen, touch enemies to smash them for bonus points<br>
-      Grab the glowing power-ups that appear in the arena
+      Grab the glowing power-ups that appear in the arena<br>
+      Every 10 seconds a new challenge shakes things up<br>
+      <kbd>M</kbd> mute sound
     </div>
     <button id="playBtn">Play</button>
     <div class="hint">Best score: <span id="startBest">0</span></div>
@@ -132,6 +144,8 @@
     <div class="hint">or press <kbd>Enter</kbd></div>
   </div>
 </div>
+
+<button class="mute" id="muteBtn">Sound: on [M]</button>
 
 <script>
 /* =====================================================================
@@ -192,6 +206,17 @@ const SETTINGS = {
   ghostTime: 4,
   shockwaveRadius: 180,
 
+  // --- Challenges (a new one every 10 seconds) ---
+  challengeEvery: 10,
+  fastEnemiesMultiplier: 1.6,
+  bulletStormMultiplier: 2,   // turrets fire this many times as often
+  shrinkAmount: 0.18,         // each wall moves in by this share of the arena's shorter side
+  shrinkSpeed: 60,            // how fast the walls move (pixels per second)
+
+  // --- Effects ---
+  trailLength: 8,             // how many fading dots follow you and the enemies
+  soundVolume: 0.5,
+
   // --- Points ---
   pointsPerSecond: 10,
   pointsEnemyCrash: 25,       // per enemy, when two bump into each other
@@ -212,7 +237,17 @@ const SETTINGS = {
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let W = 0, H = 0;                 // window size in pixels
-const arena = { x: 0, y: 0, w: 0, h: 0 }; // the playable rectangle
+const arena = { x: 0, y: 0, w: 0, h: 0 };     // the playable rectangle right now
+const baseArena = { x: 0, y: 0, w: 0, h: 0 }; // the full-size arena before any shrinking
+let arenaInset = 0;                           // how far each wall has moved in (shrinking challenge)
+
+// Work out the current arena from the full-size one and the shrink amount.
+function applyArena() {
+  arena.x = baseArena.x + arenaInset;
+  arena.y = baseArena.y + arenaInset;
+  arena.w = baseArena.w - arenaInset * 2;
+  arena.h = baseArena.h - arenaInset * 2;
+}
 
 function resize() {
   // Sharp drawing on high-resolution screens: make the canvas bigger
@@ -226,10 +261,11 @@ function resize() {
 
   // The arena sits below the HUD with a small margin on every side.
   const margin = 24, top = 76;
-  arena.x = margin;
-  arena.y = top;
-  arena.w = W - margin * 2;
-  arena.h = H - top - margin;
+  baseArena.x = margin;
+  baseArena.y = top;
+  baseArena.w = W - margin * 2;
+  baseArena.h = H - top - margin;
+  applyArena();
 
   // If the window shrank, push the player back inside.
   if (player) keepInside(player);
@@ -251,6 +287,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && state === 'playing') tryFreeze();
   if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && state === 'playing') tryDash();
   if (e.code === 'Enter' && state !== 'playing') startGame();
+  if (e.code === 'KeyM') toggleMute();
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 // If the window loses focus, forget held keys so the player doesn't drift forever.
@@ -262,6 +299,7 @@ function readMovement() {
   if (keys.KeyD || keys.ArrowRight) dx += 1;
   if (keys.KeyW || keys.ArrowUp) dy -= 1;
   if (keys.KeyS || keys.ArrowDown) dy += 1;
+  if (challenge === 'reversed') { dx = -dx; dy = -dy; } // the "reversed controls" challenge
 
   // "Normalize": without this, moving diagonally would be about 41% faster.
   const length = Math.hypot(dx, dy);
@@ -318,7 +356,10 @@ let particles = [];      // little sparks for explosions
 let texts = [];          // floating "+50" style popups
 let rings = [];          // expanding shockwave circles (just for looks)
 let afterimages = [];    // the fading copies of you left behind by a dash
-let banner = null;       // big message in the middle of the screen
+let banners = [];        // big messages in the middle of the screen, shown one after another
+let challenge = null;    // the current challenge ('reversed', 'fast', 'shrink', 'storm') or null
+let challengeTimer = 0;  // counts down to the next challenge
+let shake = 0;           // how strongly the screen is shaking right now (in pixels)
 let time = 0;            // seconds survived
 let timeScore = 0;       // points earned just by surviving
 let bonus = 0;           // extra points from smashes, crashes, near misses...
@@ -346,9 +387,13 @@ function startGame() {
     lastDX: 1, lastDY: 0,          // the direction you last moved (used for dashing)
     dashTime: 0, dashCooldown: 0, dashDX: 0, dashDY: 0,
     shield: false, ghostTime: 0, doubleTime: 0,
+    trail: [],
   };
   enemies = []; bullets = []; turrets = []; powerups = [];
-  particles = []; texts = []; rings = []; afterimages = []; banner = null;
+  particles = []; texts = []; rings = []; afterimages = []; banners = [];
+  challenge = null; challengeTimer = SETTINGS.challengeEvery;
+  arenaInset = 0; applyArena();
+  shake = 0;
   time = 0; timeScore = 0; bonus = 0;
   enemyTimer = 1; bulletTimer = 2.5;    // short grace period at the start
   powerupTimer = rand(SETTINGS.powerupMinWait, SETTINGS.powerupMaxWait);
@@ -361,10 +406,14 @@ function startGame() {
   document.getElementById('startScreen').hidden = true;
   document.getElementById('overScreen').hidden = true;
   document.getElementById('hud').hidden = false;
+  if (document.activeElement) document.activeElement.blur(); // so Space can't "press" a button
+  initAudio(); // browsers only allow sound after a click or key press, like this one
 }
 
 function gameOver() {
   state = 'over';
+  playSound('gameover');
+  addShake(24);
   const final = score();
   const isNewBest = final > best;
   if (isNewBest) { best = final; saveBest(); }
@@ -383,9 +432,12 @@ function gameOver() {
    "comboWindow" seconds, the multiplier climbs: x2, x3, x4.
    ===================================================================== */
 function addBonus(points, x, y, label) {
+  const before = comboCount;
   if (comboTimer > 0) comboCount = Math.min(SETTINGS.comboMax, comboCount + 1);
   else comboCount = 1;
   comboTimer = SETTINGS.comboWindow;
+  if (comboCount > before) playSound('combo', comboCount);
+  if (label === 'CLOSE!') playSound('close');
 
   const doubled = player.doubleTime > 0 ? 2 : 1;
   const total = points * comboCount * doubled;
@@ -408,7 +460,145 @@ function burst(x, y, color, count) {
   }
 }
 
-function showBanner(text, color) { banner = { text, color, life: 2.2 }; }
+// Banners wait in a queue so two messages at the same moment don't cover each other.
+function showBanner(text, color) {
+  if (banners.length < 3) banners.push({ text, color, life: 2.2 });
+}
+
+/* ---------- Screen shake ----------
+   addShake() makes the whole picture jolt. The shake fades out on its own
+   (see the main loop). People who turn on "reduce motion" in their
+   computer settings get a much gentler shake. */
+const gentleMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function addShake(amount) {
+  shake = Math.max(shake, gentleMotion ? amount * 0.25 : amount);
+}
+
+/* ---------- Trails ----------
+   Each moving thing remembers its last few positions.
+   We draw fading dots there to make a glowing tail. */
+function pushTrail(obj) {
+  obj.trail.push({ x: obj.x, y: obj.y });
+  if (obj.trail.length > SETTINGS.trailLength) obj.trail.shift();
+}
+
+/* =====================================================================
+   SOUND
+   No sound files! Every effect is made on the spot with the Web Audio API:
+   an "oscillator" makes a beep at a pitch (frequency), and "noise" makes
+   a hiss for explosions. We fade each one out quickly so it sounds snappy.
+   ===================================================================== */
+let audio = null;        // the browser's sound engine (created on the first click)
+let master = null;       // one volume knob that every sound goes through
+let noiseBuffer = null;  // one second of random hiss, reused for every explosion
+let muted = false;
+try { muted = localStorage.getItem('neonArena.muted') === '1'; } catch (e) {}
+const lastPlayed = {};   // stops the same sound from stacking up 20 times at once
+
+function initAudio() {
+  if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+  const AudioEngine = window.AudioContext || window.webkitAudioContext;
+  if (!AudioEngine) return; // a very old browser: the game just stays silent
+  audio = new AudioEngine();
+  master = audio.createGain();
+  master.gain.value = muted ? 0 : SETTINGS.soundVolume;
+  master.connect(audio.destination);
+
+  noiseBuffer = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+}
+
+// A beep. "type" is the shape of the wave: 'sine' is soft, 'square' is retro,
+// 'sawtooth' is buzzy. If endFreq is given, the pitch slides to it.
+function tone(freq, duration, type, volume, endFreq, delay) {
+  const start = audio.currentTime + (delay || 0);
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, start);
+  if (endFreq) osc.frequency.exponentialRampToValueAtTime(endFreq, start + duration);
+  gain.gain.setValueAtTime(volume, start);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  osc.connect(gain).connect(master);
+  osc.start(start);
+  osc.stop(start + duration + 0.02);
+}
+
+// A burst of hiss. A lower "brightness" sounds like a deep boom.
+function noise(duration, volume, brightness, delay) {
+  const start = audio.currentTime + (delay || 0);
+  const src = audio.createBufferSource();
+  src.buffer = noiseBuffer;
+  const filter = audio.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = brightness;
+  const gain = audio.createGain();
+  gain.gain.setValueAtTime(volume, start);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  src.connect(filter).connect(gain).connect(master);
+  src.start(start);
+  src.stop(start + duration);
+}
+
+// Every sound in the game, built from beeps and hiss.
+const SOUNDS = {
+  hurt:      () => { tone(220, 0.3, 'sawtooth', 0.25, 50); noise(0.25, 0.3, 900); },
+  block:     () => tone(900, 0.15, 'triangle', 0.25, 400),
+  smash:     () => { tone(700, 0.12, 'square', 0.1, 180); noise(0.12, 0.2, 3000); },
+  pop:       () => noise(0.15, 0.2, 1800),
+  thud:      () => tone(140, 0.1, 'square', 0.15, 80),
+  freeze:    () => { tone(1400, 0.6, 'sine', 0.2, 180); noise(0.5, 0.1, 5000); },
+  unfreeze:  () => tone(300, 0.25, 'sine', 0.15, 900),
+  dash:      () => { tone(250, 0.14, 'triangle', 0.15, 900); noise(0.1, 0.08, 6000); },
+  powerup:   () => { tone(523, 0.1, 'square', 0.1); tone(659, 0.1, 'square', 0.1, 0, 0.08); tone(784, 0.18, 'square', 0.1, 0, 0.16); },
+  close:     () => tone(1600, 0.06, 'sine', 0.12),
+  combo:     (level) => tone(400 + level * 150, 0.08, 'triangle', 0.12),
+  challenge: () => { tone(880, 0.15, 'triangle', 0.18); tone(1320, 0.3, 'triangle', 0.18, 0, 0.12); },
+  shock:     () => { tone(120, 0.5, 'sine', 0.35, 40); noise(0.4, 0.3, 1200); },
+  boss:      () => { tone(70, 0.9, 'sawtooth', 0.25, 50); tone(105, 0.9, 'sawtooth', 0.15, 70); },
+  bossDown:  () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.2, 'square', 0.1, 0, i * 0.1)); noise(0.6, 0.3, 1500); },
+  ring:      () => tone(200, 0.15, 'square', 0.07, 120),
+  gameover:  () => { [440, 370, 311, 220].forEach((f, i) => tone(f, 0.3, 'sawtooth', 0.14, 0, i * 0.18)); },
+};
+
+function playSound(name, extra) {
+  if (!audio || muted) return;
+  const now = performance.now();
+  if (now - (lastPlayed[name] || 0) < 45) return; // played this one a moment ago
+  lastPlayed[name] = now;
+  SOUNDS[name](extra);
+}
+
+function toggleMute() {
+  muted = !muted;
+  try { localStorage.setItem('neonArena.muted', muted ? '1' : '0'); } catch (e) {}
+  if (master) master.gain.value = muted ? 0 : SETTINGS.soundVolume;
+  updateMuteButton();
+}
+function updateMuteButton() {
+  document.getElementById('muteBtn').textContent = muted ? 'Sound: off [M]' : 'Sound: on [M]';
+}
+
+/* =====================================================================
+   CHALLENGES
+   Every 10 seconds a new random challenge starts and lasts until the next one.
+   ===================================================================== */
+const CHALLENGES = {
+  reversed: { name: 'REVERSED CONTROLS', color: '#ff9b3f' },
+  fast:     { name: 'FASTER ENEMIES',    color: '#ff3fd0' },
+  shrink:   { name: 'SHRINKING ARENA',   color: '#5dff8a' },
+  storm:    { name: 'BULLET STORM',      color: '#ffe94a' },
+};
+
+function startChallenge() {
+  // Pick a random challenge, but never the same one twice in a row.
+  const options = Object.keys(CHALLENGES).filter(c => c !== challenge);
+  challenge = options[Math.floor(Math.random() * options.length)];
+  challengeTimer = SETTINGS.challengeEvery;
+  showBanner(CHALLENGES[challenge].name + '!', CHALLENGES[challenge].color);
+  playSound('challenge');
+}
 
 /* =====================================================================
    TIME FREEZE & DASH
@@ -416,6 +606,7 @@ function showBanner(text, color) { banner = { text, color, life: 2.2 }; }
 function tryFreeze() {
   if (freezeLeft > 0 || freezeCooldown > 0) return; // still active or recharging
   freezeLeft = SETTINGS.freezeDuration;
+  playSound('freeze');
 }
 
 function tryDash() {
@@ -426,6 +617,7 @@ function tryDash() {
   player.dashDY = move.dx || move.dy ? move.dy : player.lastDY;
   player.dashTime = SETTINGS.dashDuration;
   player.dashCooldown = SETTINGS.dashCooldown;
+  playSound('dash');
 }
 
 const isDashing = () => player.dashTime > 0;
@@ -463,7 +655,7 @@ function makeEnemy(type, x, y) {
   return {
     type, x, y, r: t.r, hp: t.hp, color: t.color,
     speedMul: t.speed * rand(0.85, 1.15), // each enemy is a little different
-    hitCooldown: 0, flash: 0, angle: 0, spin: 0,
+    hitCooldown: 0, flash: 0, angle: 0, spin: 0, trail: [],
     phase: 'chase', phaseTime: 0, dashWait: rand(0.5, 1.5), // used by dashers
     life: SETTINGS.bossLifetime, ringTimer: 2,             // used by the boss
   };
@@ -487,6 +679,7 @@ function spawnBoss() {
   const p = randomEdgePoint();
   enemies.push(makeEnemy('boss', p.x, p.y));
   showBanner('BOSS INCOMING', '#ff4f6d');
+  playSound('boss');
 }
 
 const bossAlive = () => enemies.some(e => e.type === 'boss' && !e.dead);
@@ -496,6 +689,8 @@ function destroyEnemy(e, cause) {
   if (e.dead) return;
   e.dead = true;
   burst(e.x, e.y, e.color, e.type === 'boss' ? 60 : 16);
+  if (e.type !== 'boss') playSound(cause === 'crash' ? 'pop' : 'smash');
+  if (cause === 'crash') addShake(3);
 
   if (cause === 'smash') addBonus(SETTINGS.pointsSmash, e.x, e.y);
   if (cause === 'shock') addBonus(SETTINGS.pointsShockwave, e.x, e.y);
@@ -512,6 +707,8 @@ function destroyEnemy(e, cause) {
   if (e.type === 'boss') {
     addBonus(SETTINGS.pointsBoss, e.x, e.y, 'BOSS DOWN');
     showBanner('BOSS DEFEATED', '#ffe94a');
+    playSound('bossDown');
+    addShake(18);
     spawnPowerup(e.x, e.y);
   }
 }
@@ -524,7 +721,7 @@ function hitEnemy(e, cause) {
   e.hitCooldown = e.type === 'boss' ? 0.5 : 0.3;
   e.flash = 0.15;
   if (e.hp <= 0) destroyEnemy(e, cause);
-  else burst(e.x, e.y, '#ffffff', 6);
+  else { burst(e.x, e.y, '#ffffff', 6); playSound('thud'); }
 }
 
 // Enemies created during an update (splitter children) wait here,
@@ -550,6 +747,7 @@ function fireBullet(turret) {
 }
 
 function fireRing(boss) {
+  playSound('ring');
   const offset = rand(0, Math.PI * 2);
   for (let i = 0; i < SETTINGS.bossRingBullets; i++) {
     addBullet(boss.x, boss.y, offset + (i / SETTINGS.bossRingBullets) * Math.PI * 2, SETTINGS.bulletSpeed * 0.75);
@@ -595,6 +793,7 @@ function applyPowerup(p) {
   const info = POWERUPS[p.kind];
   addText(p.x, p.y - 20, info.name + '!', info.color, 18);
   burst(p.x, p.y, info.color, 20);
+  playSound('powerup');
 
   if (p.kind === 'shield') player.shield = true;
   if (p.kind === 'heart') {
@@ -611,6 +810,8 @@ function applyPowerup(p) {
 function shockwave() {
   const R = SETTINGS.shockwaveRadius;
   rings.push({ x: player.x, y: player.y, r: 0, max: R, life: 0.4 });
+  playSound('shock');
+  addShake(10);
   bullets = bullets.filter(b => distance(b, player) > R);
   turrets = turrets.filter(t => distance(t, player) > R);
   for (const e of enemies) {
@@ -633,7 +834,7 @@ function update(dt) {
   // --- Timers that always run ---
   if (frozen) {
     freezeLeft -= dt;
-    if (freezeLeft <= 0) { freezeLeft = 0; freezeCooldown = SETTINGS.freezeCooldown; }
+    if (freezeLeft <= 0) { freezeLeft = 0; freezeCooldown = SETTINGS.freezeCooldown; playSound('unfreeze'); }
   } else if (freezeCooldown > 0) {
     freezeCooldown = Math.max(0, freezeCooldown - dt);
   }
@@ -643,6 +844,20 @@ function update(dt) {
   player.ghostTime = Math.max(0, player.ghostTime - dt);
   player.doubleTime = Math.max(0, player.doubleTime - dt);
   for (const e of enemies) { e.hitCooldown = Math.max(0, e.hitCooldown - dt); e.flash = Math.max(0, e.flash - dt); }
+
+  // --- Challenges: a new one every "challengeEvery" seconds ---
+  challengeTimer -= dt;
+  if (challengeTimer <= 0) startChallenge();
+
+  // --- Shrinking arena: walls slide in during the challenge, then slide back out ---
+  const targetInset = challenge === 'shrink' ? Math.min(baseArena.w, baseArena.h) * SETTINGS.shrinkAmount : 0;
+  if (arenaInset !== targetInset) {
+    const step = SETTINGS.shrinkSpeed * dt;
+    arenaInset = targetInset > arenaInset ? Math.min(targetInset, arenaInset + step) : Math.max(targetInset, arenaInset - step);
+    applyArena();
+    for (const e of enemies) keepInside(e);   // the walls push everything inward
+    for (const p of powerups) keepInside(p);
+  }
 
   // --- Announce new enemy types the first time they unlock ---
   const unlocks = [['dasher', SETTINGS.unlockDasher, 'NEW: DASHER', '#ff9b3f'],
@@ -666,6 +881,7 @@ function update(dt) {
     player.y += move.dy * playerSpeedNow() * dt;
   }
   keepInside(player);
+  pushTrail(player);
 
   // --- Power-up spawning and pickup (also works while frozen) ---
   powerupTimer -= dt;
@@ -699,6 +915,7 @@ function update(dt) {
       if (bulletTimer <= 0) {
         spawnTurret();
         bulletTimer = Math.max(SETTINGS.bulletSpawnMin, SETTINGS.bulletSpawnStart - time * 0.02);
+        if (challenge === 'storm') bulletTimer /= SETTINGS.bulletStormMultiplier;
       }
     }
 
@@ -769,6 +986,7 @@ function update(dt) {
 
   enemies = enemies.filter(e => !e.dead).concat(toSpawn);
   toSpawn = [];
+  for (const e of enemies) pushTrail(e); // (while frozen the tails shrink back into the enemy)
   bullets = bullets.filter(b => !b.dead);
 
   updateEffects(dt);
@@ -778,7 +996,8 @@ function update(dt) {
 
 // How each enemy type moves.
 function moveEnemy(e, dt) {
-  const speed = enemySpeedNow() * e.speedMul;
+  const challengeBoost = challenge === 'fast' ? SETTINGS.fastEnemiesMultiplier : 1;
+  const speed = enemySpeedNow() * e.speedMul * challengeBoost;
   const toPlayer = Math.atan2(player.y - e.y, player.x - e.x);
   e.spin += dt * 2;
 
@@ -831,11 +1050,15 @@ function hurtPlayer() {
     player.invulnerable = 0.6;
     addText(player.x, player.y - 24, 'BLOCKED', '#3ff7ff', 16);
     burst(player.x, player.y, '#3ff7ff', 18);
+    playSound('block');
+    addShake(6);
     return;
   }
   player.health -= 1;
   player.invulnerable = SETTINGS.invulnerableTime;
   burst(player.x, player.y, '#ff3fd0', 20);
+  playSound('hurt');
+  addShake(12);
 }
 
 // Sparks, popups, rings and banners keep animating even while frozen.
@@ -848,7 +1071,7 @@ function updateEffects(dt) {
   rings = rings.filter(r => r.life > 0);
   for (const a of afterimages) a.life -= dt;
   afterimages = afterimages.filter(a => a.life > 0);
-  if (banner) { banner.life -= dt; if (banner.life <= 0) banner = null; }
+  if (banners.length) { banners[0].life -= dt; if (banners[0].life <= 0) banners.shift(); }
 }
 
 /* =====================================================================
@@ -872,6 +1095,19 @@ function polygon(x, y, r, sides, rotation) {
     else ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
   }
   ctx.closePath();
+}
+
+// The glowing tail: fading dots that get smaller toward the end.
+// 'lighter' makes overlapping colors add up and glow, like real neon.
+function drawTrail(obj, color) {
+  const n = obj.trail.length;
+  ctx.fillStyle = color;
+  for (let i = 0; i < n - 1; i++) {
+    const t = obj.trail[i], k = (i + 1) / n;
+    ctx.globalAlpha = k * 0.3;
+    ctx.beginPath(); ctx.arc(t.x, t.y, obj.r * k, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawEnemy(e, frozen, now) {
@@ -934,6 +1170,10 @@ function draw(now) {
   ctx.fillStyle = '#05040f';
   ctx.fillRect(0, 0, W, H);
 
+  // Screen shake: nudge the whole picture by a small random amount this frame.
+  ctx.save();
+  if (shake > 0.5) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+
   // 2. Faint grid inside the arena
   ctx.strokeStyle = 'rgba(80, 90, 180, 0.12)';
   ctx.lineWidth = 1;
@@ -950,7 +1190,7 @@ function draw(now) {
   ctx.lineWidth = 2;
   ctx.strokeRect(arena.x, arena.y, arena.w, arena.h);
 
-  if (state === 'start' || !player) { ctx.shadowBlur = 0; return; }
+  if (state === 'start' || !player) { ctx.shadowBlur = 0; ctx.restore(); return; }
 
   // 4. Power-ups
   for (const p of powerups) drawPowerup(p, now);
@@ -980,7 +1220,11 @@ function draw(now) {
   }
   ctx.globalAlpha = 1;
 
-  // 8. Enemies and bullets
+  // 8. Glowing trails, then enemies and bullets
+  ctx.globalCompositeOperation = 'lighter';
+  for (const e of enemies) drawTrail(e, frozen ? '#7fb8ff' : e.color);
+  if (player.ghostTime === 0) drawTrail(player, '#3ff7ff');
+  ctx.globalCompositeOperation = 'source-over';
   for (const e of enemies) drawEnemy(e, frozen, now);
   for (const b of bullets) glowCircle(b.x, b.y, b.r, frozen ? '#7fb8ff' : '#ffe94a', 14);
 
@@ -1016,6 +1260,7 @@ function draw(now) {
   ctx.globalAlpha = 1;
 
   // 12. Banner in the middle of the arena
+  const banner = banners[0];
   if (banner) {
     ctx.globalAlpha = Math.min(1, banner.life);
     ctx.fillStyle = banner.color; ctx.shadowColor = banner.color; ctx.shadowBlur = 24;
@@ -1023,6 +1268,8 @@ function draw(now) {
     ctx.fillText(banner.text, arena.x + arena.w / 2, arena.y + arena.h * 0.3);
     ctx.globalAlpha = 1; ctx.shadowBlur = 0;
   }
+
+  ctx.restore(); // end of the shaking part
 
   // 13. Blue tint over the whole screen while frozen
   if (frozen) {
@@ -1062,7 +1309,10 @@ function updateHud() {
   el('dashLabel').textContent = player.dashCooldown > 0 ? 'Dash ' + player.dashCooldown.toFixed(1) + 's' : 'Dash [Shift]';
   el('dashBox').classList.toggle('ready', player.dashCooldown === 0);
 
-  // Combo and active power-ups
+  // Current challenge, combo and active power-ups
+  setHtml('challenge', challenge
+    ? `<span style="color:${CHALLENGES[challenge].color}">${CHALLENGES[challenge].name} ${Math.ceil(challengeTimer)}s</span>`
+    : '');
   setHtml('combo', comboCount > 1 ? 'COMBO ×' + comboCount : '');
   let fx = '';
   if (player.shield) fx += '<span class="effect" style="color:#3ff7ff">Shield</span>';
@@ -1084,6 +1334,7 @@ function loop(now) {
   lastTime = now;
 
   if (state === 'playing') update(dt);
+  shake = Math.max(0, shake - (shake * 6 + 4) * dt); // the shake calms down quickly
   draw(now);
   updateHud();
   requestAnimationFrame(loop);
@@ -1092,6 +1343,12 @@ function loop(now) {
 /* ---------- Buttons & first launch ---------- */
 el('playBtn').addEventListener('click', startGame);
 el('restartBtn').addEventListener('click', startGame);
+el('muteBtn').addEventListener('click', () => {
+  initAudio();
+  toggleMute();
+  el('muteBtn').blur(); // so pressing Space later doesn't click it again
+});
+updateMuteButton();
 el('startBest').textContent = best;
 resize();
 requestAnimationFrame(loop);

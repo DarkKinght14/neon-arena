@@ -12,6 +12,7 @@ Double-click `index.html` to open it in Chrome, Edge or Firefox.
 | Shift | Dash: a quick burst you can't be hit during |
 | Space | Freeze enemies and bullets for 2 seconds |
 | Enter | Restart after game over |
+| M | Mute or unmute sound |
 
 ## Features
 
@@ -21,6 +22,9 @@ Double-click `index.html` to open it in Chrome, Edge or Firefox.
 - Enemy types that unlock over time: dasher, tank, splitter
 - A boss every 60 seconds
 - Near-miss bonus and a combo multiplier (up to ×4)
+- A new challenge every 10 seconds: reversed controls, faster enemies, shrinking arena or bullet storm
+- Screen shake, glowing trails and particle bursts
+- Sound effects generated in code (no audio files), with a mute button that's remembered
 - High score saved in the browser
 
 ## Tuning

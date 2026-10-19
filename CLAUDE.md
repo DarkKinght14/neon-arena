@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Neon Arena is a neon arcade survival game in a single file, `index.html`, holding the HTML, CSS and JS. The user is a beginner and builds it in stages, with a plain-language explanation after each one.
 
 Hard constraints:
-- It must stay **one file** that works **offline**. That means no external fonts, libraries, CDNs, images or audio files. Sound (planned) is generated with the Web Audio API.
+- It must stay **one file** that works **offline**. That means no external fonts, libraries, CDNs, images or audio files. Sound is generated with the Web Audio API.
 - The target is a **desktop browser with a keyboard** (WASD/arrows, Shift, Space, Enter).
 - Comments are written for a beginner. Match the existing tone and the `/* ===== SECTION ===== */` headers.
 
@@ -36,8 +36,8 @@ Git: if `git` isn't on PATH, it's at `C:\Program Files\Git\cmd`. The GitHub CLI 
 - **Speed scaling:** `playerSpeedNow()` grows faster than `enemySpeedNow()`, so the player always outruns a normal enemy. Enemy speed is computed live each frame (`enemySpeedNow() * e.speedMul`), not stored at spawn time.
 - **Scoring:** `score() = floor(timeScore) + bonus`. Every bonus must go through `addBonus(points, x, y, label)`, which applies the combo multiplier (up to `comboMax`) and double points, then shows the popup.
 - **Randomness:** power-up kinds and enemy types are chosen by `weightedPick({key: weight})`, with weights adjusted by the game situation. At most one power-up is on the field at a time (`spawnPowerup()` replaces the array). Effects are applied in `applyPowerup()`.
-- **Persistence:** the high score is saved in `localStorage` under `neonArena.best`, and every access is wrapped in try/catch.
-
-## Roadmap
-
-Next is Build 3: a challenge every 10s (reversed controls, faster enemies, shrinking arena, bullet storm), screen shake, glowing trails, and Web Audio sound effects with a mute button (M key, remembered in localStorage). Reuse `burst()`, `showBanner()` and `addText()` for these effects.
+- **Arena:** `baseArena` is the full window-sized rectangle, set in `resize()`. `arena` is the current playable one. `applyArena()` derives it from `arenaInset` (used by the shrinking challenge). All gameplay code uses `arena`.
+- **Challenges:** `challenge` holds one of the keys of `CHALLENGES`, or `null` for the first 10s. `startChallenge()` rotates it every `challengeEvery` seconds and never repeats the same one twice in a row. Effects are checked inline wherever they apply: `readMovement()` (reversed), `moveEnemy()` (fast), the turret timer (storm), and the inset step in `update()` (shrink).
+- **Effects:** `burst()` makes particles, `addText()` floating popups, `showBanner()` the queued center messages (`banners`) and `addShake()` the screen shake. Shake is applied as a translate inside `ctx.save()`/`restore()` in `draw()` and decays in `loop()`. Trails come from `pushTrail()` every frame (`obj.trail`) and are drawn with the `'lighter'` blend mode.
+- **Sound:** `initAudio()` creates the AudioContext, and must run from a user gesture (it's called from `startGame()` and the mute button). Every sound is a recipe in `SOUNDS` made from `tone()`/`noise()`. Play them through `playSound(name)`, which handles mute and throttles repeats to one per 45ms.
+- **Persistence:** `localStorage` keys are `neonArena.best` (high score) and `neonArena.muted`, and every access is wrapped in try/catch.
