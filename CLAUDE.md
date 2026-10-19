@@ -11,6 +11,16 @@ Hard constraints:
 - The target is a **desktop browser with a keyboard** (WASD/arrows, Shift, Space, Enter).
 - Comments are written for a beginner. Match the existing tone and the `/* ===== SECTION ===== */` headers.
 
+## Version control (required)
+
+Commit and push to GitHub **regularly as you work**, not only at the end. The goal is that no progress is ever lost and any change can be reverted.
+- Commit after each meaningful working step: a feature, a fix, a tuning pass or a docs update. Don't let several unrelated changes pile up into one commit.
+- Before committing, run the syntax check below (and the smoke test for gameplay changes). Don't commit a broken game.
+- Use clean commit messages: a short imperative subject (e.g. `Add bullet storm challenge`, `Fix enemies escaping shrunken arena`), plus an optional body explaining what changed and why.
+- Push right after every commit (`git push`), so GitHub always has the latest state.
+- Undo with `git revert`. Never rewrite pushed history (`reset --hard`, `push --force`, amending pushed commits).
+- At the end of a task, confirm `git status` is clean and `main` is up to date with `origin/main`.
+
 ## Commands
 
 There's no build, package manager or test suite. To run it, open `index.html` in a browser.
@@ -23,7 +33,7 @@ $js = [regex]::Match($html, '(?s)<script>(.*)</script>').Groups[1].Value
 ```
 To smoke-test at runtime, run the extracted script in Node's `vm` with stubbed `document`, `window`, `localStorage` and a Proxy canvas context. Append test code that calls `startGame()`, loops `update(1/60)` / `draw()` / `updateHud()` with random `keys`, and asserts there are no NaN positions. Top-level `let`/`const` aren't globals, so the test code has to be concatenated into the same script string.
 
-Git: if `git` isn't on PATH, it's at `C:\Program Files\Git\cmd`. The GitHub CLI is at `C:\Program Files\GitHub CLI\gh.exe`. The remote is `origin` → `github.com/DarkKinght14/neon-arena` (private, `main`). **Commit every completed change with a clean, imperative message and push it.** The user relies on history to revert, so undo changes with `git revert`, not by rewriting history.
+Git: if `git` isn't on PATH, it's at `C:\Program Files\Git\cmd`. The GitHub CLI is at `C:\Program Files\GitHub CLI\gh.exe`. The remote is `origin` → `github.com/DarkKinght14/neon-arena` (private, `main`).
 
 ## Architecture (inside `index.html`)
 
