@@ -1,0 +1,1100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Arena</title>
+<style>
+  /* ---------- COLORS & FONTS ----------
+     All the neon colors live here as "variables" so they're easy to change. */
+  :root {
+    --bg: #05040f;
+    --cyan: #3ff7ff;     /* the player */
+    --magenta: #ff3fd0;  /* enemies */
+    --yellow: #ffe94a;   /* bullets */
+    --ice: #7fb8ff;      /* time freeze */
+    --text: #e8f4ff;
+    --dim: #7c86a8;
+    --font: "Cascadia Code", "Consolas", "SF Mono", "Menlo", monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--font); }
+
+  /* The canvas fills the whole window. Everything in the game is drawn onto it. */
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ---------- HUD (score, time, health, meters) ---------- */
+  .hud {
+    position: fixed; top: 0; left: 0; right: 0; height: 64px; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    pointer-events: none; font-size: 15px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .hud .group { display: flex; gap: 22px; align-items: center; }
+  .hud .label { color: var(--dim); font-size: 11px; display: block; white-space: nowrap; }
+  .hud .value { font-size: 20px; font-variant-numeric: tabular-nums; text-shadow: 0 0 10px currentColor; }
+  .hearts { color: var(--magenta); font-size: 22px; letter-spacing: 4px; text-shadow: 0 0 10px var(--magenta); }
+  .hearts .lost { color: #2a2440; text-shadow: none; }
+  .meter { width: 120px; }
+  .meter .bar { height: 7px; border-radius: 4px; background: #16183a; overflow: hidden; margin-top: 5px; }
+  .meter .fill { height: 100%; width: 100%; }
+  #freezeFill { background: var(--ice); box-shadow: 0 0 10px var(--ice); }
+  #dashFill { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+  .meter.ready .label { color: var(--text); }
+  .middle { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; }
+  .combo { font-size: 22px; color: var(--yellow); text-shadow: 0 0 12px var(--yellow); }
+  .effect {
+    font-size: 12px; padding: 3px 8px; border-radius: 4px; border: 1px solid currentColor;
+    text-shadow: 0 0 8px currentColor; box-shadow: 0 0 8px currentColor inset; white-space: nowrap;
+  }
+
+  /* ---------- START / GAME OVER SCREENS ---------- */
+  .overlay {
+    position: fixed; inset: 0; display: grid; place-items: center; padding: 24px;
+    background: rgba(5, 4, 15, .78); backdrop-filter: blur(3px);
+  }
+  .panel { text-align: center; max-width: 520px; display: flex; flex-direction: column; gap: 18px; align-items: center; }
+  h1 {
+    margin: 0; font-size: clamp(40px, 8vw, 68px); letter-spacing: .08em; line-height: 1;
+    color: var(--cyan); text-shadow: 0 0 12px var(--cyan), 0 0 40px var(--cyan);
+  }
+  h1 span { color: var(--magenta); text-shadow: 0 0 12px var(--magenta), 0 0 40px var(--magenta); }
+  h2 { margin: 0; font-size: 44px; color: var(--magenta); text-shadow: 0 0 14px var(--magenta); letter-spacing: .1em; }
+  .controls { color: var(--dim); line-height: 1.9; font-size: 14px; }
+  kbd {
+    color: var(--text); border: 1px solid #3a3f6a; border-bottom-width: 3px; border-radius: 5px;
+    padding: 1px 7px; font-family: var(--font); font-size: 12px;
+  }
+  .stats { display: grid; grid-template-columns: repeat(3, auto); gap: 6px 28px; font-variant-numeric: tabular-nums; }
+  .stats .label { color: var(--dim); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+  .stats .value { font-size: 24px; }
+  .new-best { color: var(--yellow); text-shadow: 0 0 10px var(--yellow); letter-spacing: .1em; }
+  button {
+    font-family: var(--font); font-size: 18px; letter-spacing: .14em; text-transform: uppercase;
+    padding: 12px 34px; border-radius: 8px; cursor: pointer;
+    color: var(--bg); background: var(--cyan); border: 0;
+    box-shadow: 0 0 18px var(--cyan), 0 0 50px rgba(63, 247, 255, .35);
+  }
+  button:hover { filter: brightness(1.15); }
+  button:focus-visible { outline: 3px solid var(--text); outline-offset: 4px; }
+  .hint { color: var(--dim); font-size: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<!-- HUD: the information bar across the top -->
+<div class="hud" id="hud" hidden>
+  <div class="group">
+    <div><span class="label">Health</span><span class="hearts" id="hearts"></span></div>
+    <div class="meter" id="freezeBox"><span class="label" id="freezeLabel">Freeze [Space]</span><div class="bar"><div class="fill" id="freezeFill"></div></div></div>
+    <div class="meter" id="dashBox"><span class="label" id="dashLabel">Dash [Shift]</span><div class="bar"><div class="fill" id="dashFill"></div></div></div>
+  </div>
+  <div class="middle">
+    <span class="combo" id="combo"></span>
+    <span id="effects" class="middle"></span>
+  </div>
+  <div class="group">
+    <div><span class="label">Time</span><span class="value" id="time">0.0s</span></div>
+    <div><span class="label">Score</span><span class="value" id="score">0</span></div>
+    <div><span class="label">Best</span><span class="value" id="best">0</span></div>
+  </div>
+</div>
+
+<!-- Start screen -->
+<div class="overlay" id="startScreen">
+  <div class="panel">
+    <h1>NEON <span>ARENA</span></h1>
+    <div class="controls">
+      <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrow keys to move<br>
+      <kbd>Shift</kbd> dash: a quick burst you can't be hit during<br>
+      <kbd>Space</kbd> freeze enemies and bullets for 2 seconds<br>
+      While frozen, touch enemies to smash them for bonus points<br>
+      Grab the glowing power-ups that appear in the arena
+    </div>
+    <button id="playBtn">Play</button>
+    <div class="hint">Best score: <span id="startBest">0</span></div>
+  </div>
+</div>
+
+<!-- Game over screen -->
+<div class="overlay" id="overScreen" hidden>
+  <div class="panel">
+    <h2>GAME OVER</h2>
+    <div class="new-best" id="newBest" hidden>★ NEW HIGH SCORE ★</div>
+    <div class="stats">
+      <span class="label">Time</span><span class="label">Score</span><span class="label">Best</span>
+      <span class="value" id="finalTime">0s</span><span class="value" id="finalScore">0</span><span class="value" id="finalBest">0</span>
+    </div>
+    <button id="restartBtn">Restart</button>
+    <div class="hint">or press <kbd>Enter</kbd></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   SETTINGS
+   Every number that controls how the game feels lives here.
+   Change one, save, refresh the page to try it.
+   (Speeds are in pixels per second, times are in seconds.)
+   ===================================================================== */
+const SETTINGS = {
+  // --- Player ---
+  playerStartSpeed: 300,
+  playerMaxSpeed: 420,
+  playerSpeedGrowth: 2,       // player gets this much faster every second...
+  playerRadius: 12,
+  maxHealth: 3,
+  invulnerableTime: 1.2,      // after getting hit, you can't be hit again for this long
+
+  // --- Dash (Shift) ---
+  dashSpeedMultiplier: 3,
+  dashDuration: 0.18,
+  dashCooldown: 1.5,
+
+  // --- Enemies ---
+  enemyRadius: 13,
+  enemyStartSpeed: 110,
+  enemyMaxSpeed: 230,
+  enemySpeedGrowth: 1.5,      // ...while enemies only gain this much (so you stay faster)
+  enemySpawnStart: 1.6,       // seconds between enemy spawns at the start...
+  enemySpawnMin: 0.45,        // ...and the fastest it can get
+  maxEnemies: 40,
+  unlockDasher: 20,           // new enemy types join the mix after this many seconds
+  unlockTank: 35,
+  unlockSplitter: 50,
+
+  // --- Boss ---
+  bossEvery: 60,              // a boss arrives every 60 seconds
+  bossHealth: 5,
+  bossLifetime: 25,           // it leaves if you don't beat it in time
+  bossRingEvery: 3,           // seconds between bullet rings
+  bossRingBullets: 12,
+
+  // --- Bullets ---
+  bulletRadius: 5,
+  bulletSpeed: 270,
+  bulletSpawnStart: 1.8,      // seconds between bullets at the start
+  bulletSpawnMin: 0.5,
+  bulletWarning: 0.6,         // a turret blinks this long before it shoots
+
+  // --- Time freeze (Space) ---
+  freezeDuration: 2,
+  freezeCooldown: 8,
+
+  // --- Power-ups ---
+  powerupMinWait: 10,         // a new power-up appears every 10-15 seconds
+  powerupMaxWait: 15,
+  powerupLifetime: 8,         // it disappears if you don't grab it
+  doublePointsTime: 8,
+  ghostTime: 4,
+  shockwaveRadius: 180,
+
+  // --- Points ---
+  pointsPerSecond: 10,
+  pointsEnemyCrash: 25,       // per enemy, when two bump into each other
+  pointsSmash: 50,            // you smash a frozen enemy
+  pointsShockwave: 30,        // per enemy a shockwave destroys
+  pointsNearMiss: 15,         // a bullet passes very close without hitting you
+  pointsBoss: 500,
+  pointsFullHeart: 100,       // picking up a heart when your health is already full
+  nearMissGap: 14,            // how close (in pixels) counts as a near miss
+  comboWindow: 2.5,           // do bonus moves within this many seconds to build a combo
+  comboMax: 4,
+};
+
+/* =====================================================================
+   CANVAS SETUP
+   The canvas is our drawing surface. "ctx" is the pen we draw with.
+   ===================================================================== */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0;                 // window size in pixels
+const arena = { x: 0, y: 0, w: 0, h: 0 }; // the playable rectangle
+
+function resize() {
+  // Sharp drawing on high-resolution screens: make the canvas bigger
+  // internally, then scale the pen down to match.
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // The arena sits below the HUD with a small margin on every side.
+  const margin = 24, top = 76;
+  arena.x = margin;
+  arena.y = top;
+  arena.w = W - margin * 2;
+  arena.h = H - top - margin;
+
+  // If the window shrank, push the player back inside.
+  if (player) keepInside(player);
+}
+window.addEventListener('resize', resize);
+
+/* =====================================================================
+   INPUT (KEYBOARD)
+   We remember which keys are held down right now in the "keys" object.
+   ===================================================================== */
+const keys = {};
+const GAME_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'];
+
+window.addEventListener('keydown', (e) => {
+  if (GAME_KEYS.includes(e.code)) e.preventDefault(); // stop the page from scrolling
+  keys[e.code] = true;
+
+  if (e.repeat) return; // holding a key down sends repeats; we only want the first press
+  if (e.code === 'Space' && state === 'playing') tryFreeze();
+  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && state === 'playing') tryDash();
+  if (e.code === 'Enter' && state !== 'playing') startGame();
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+// If the window loses focus, forget held keys so the player doesn't drift forever.
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+function readMovement() {
+  let dx = 0, dy = 0;
+  if (keys.KeyA || keys.ArrowLeft) dx -= 1;
+  if (keys.KeyD || keys.ArrowRight) dx += 1;
+  if (keys.KeyW || keys.ArrowUp) dy -= 1;
+  if (keys.KeyS || keys.ArrowDown) dy += 1;
+
+  // "Normalize": without this, moving diagonally would be about 41% faster.
+  const length = Math.hypot(dx, dy);
+  if (length > 0) { dx /= length; dy /= length; }
+  return { dx, dy };
+}
+
+/* =====================================================================
+   HELPERS
+   ===================================================================== */
+const rand = (min, max) => min + Math.random() * (max - min);
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+// COLLISION: two circles touch when the gap between their centers
+// is smaller than their two radii added together.
+const touching = (a, b) => distance(a, b) < a.r + b.r;
+
+function keepInside(obj) {
+  obj.x = Math.max(arena.x + obj.r, Math.min(arena.x + arena.w - obj.r, obj.x));
+  obj.y = Math.max(arena.y + obj.r, Math.min(arena.y + arena.h - obj.r, obj.y));
+}
+
+// A random point on the arena's edge (used for spawning things).
+function randomEdgePoint() {
+  const side = Math.floor(Math.random() * 4);
+  if (side === 0) return { x: rand(arena.x, arena.x + arena.w), y: arena.y };            // top
+  if (side === 1) return { x: arena.x + arena.w, y: rand(arena.y, arena.y + arena.h) };  // right
+  if (side === 2) return { x: rand(arena.x, arena.x + arena.w), y: arena.y + arena.h };  // bottom
+  return { x: arena.x, y: rand(arena.y, arena.y + arena.h) };                             // left
+}
+
+// Pick a random item where some are more likely than others.
+// Example: { a: 3, b: 1 } picks "a" three times as often as "b".
+function weightedPick(weights) {
+  let total = 0;
+  for (const k in weights) total += weights[k];
+  let roll = Math.random() * total;
+  for (const k in weights) { roll -= weights[k]; if (roll <= 0) return k; }
+  return Object.keys(weights)[0];
+}
+
+/* =====================================================================
+   GAME STATE
+   "state" is which screen we're on: 'start', 'playing' or 'over'.
+   Everything else describes the current round.
+   ===================================================================== */
+let state = 'start';
+let player = null;
+let enemies = [];
+let bullets = [];
+let turrets = [];        // blinking warnings that turn into bullets
+let powerups = [];       // pickups lying in the arena (at most one at a time)
+let particles = [];      // little sparks for explosions
+let texts = [];          // floating "+50" style popups
+let rings = [];          // expanding shockwave circles (just for looks)
+let afterimages = [];    // the fading copies of you left behind by a dash
+let banner = null;       // big message in the middle of the screen
+let time = 0;            // seconds survived
+let timeScore = 0;       // points earned just by surviving
+let bonus = 0;           // extra points from smashes, crashes, near misses...
+let enemyTimer = 0;      // counts down to the next enemy spawn
+let bulletTimer = 0;     // counts down to the next turret
+let powerupTimer = 0;    // counts down to the next power-up
+let nextBossAt = 0;      // the survival time when the next boss arrives
+let freezeLeft = 0;      // > 0 while time is frozen
+let freezeCooldown = 0;  // > 0 while the freeze is recharging
+let comboCount = 1;      // the current combo multiplier (x1, x2, x3, x4)
+let comboTimer = 0;      // time left to keep the combo going
+let announced = {};      // which "new enemy" messages we've already shown
+
+/* ---------- HIGH SCORE (saved in the browser with localStorage) ---------- */
+let best = 0;
+try { best = Number(localStorage.getItem('neonArena.best')) || 0; } catch (e) {}
+function saveBest() { try { localStorage.setItem('neonArena.best', String(best)); } catch (e) {} }
+
+const score = () => Math.floor(timeScore) + bonus;
+
+function startGame() {
+  player = {
+    x: arena.x + arena.w / 2, y: arena.y + arena.h / 2, r: SETTINGS.playerRadius,
+    health: SETTINGS.maxHealth, invulnerable: 0,
+    lastDX: 1, lastDY: 0,          // the direction you last moved (used for dashing)
+    dashTime: 0, dashCooldown: 0, dashDX: 0, dashDY: 0,
+    shield: false, ghostTime: 0, doubleTime: 0,
+  };
+  enemies = []; bullets = []; turrets = []; powerups = [];
+  particles = []; texts = []; rings = []; afterimages = []; banner = null;
+  time = 0; timeScore = 0; bonus = 0;
+  enemyTimer = 1; bulletTimer = 2.5;    // short grace period at the start
+  powerupTimer = rand(SETTINGS.powerupMinWait, SETTINGS.powerupMaxWait);
+  nextBossAt = SETTINGS.bossEvery;
+  freezeLeft = 0; freezeCooldown = 0;
+  comboCount = 1; comboTimer = 0;
+  announced = {};
+
+  state = 'playing';
+  document.getElementById('startScreen').hidden = true;
+  document.getElementById('overScreen').hidden = true;
+  document.getElementById('hud').hidden = false;
+}
+
+function gameOver() {
+  state = 'over';
+  const final = score();
+  const isNewBest = final > best;
+  if (isNewBest) { best = final; saveBest(); }
+
+  document.getElementById('finalTime').textContent = time.toFixed(1) + 's';
+  document.getElementById('finalScore').textContent = final;
+  document.getElementById('finalBest').textContent = best;
+  document.getElementById('newBest').hidden = !isNewBest;
+  document.getElementById('overScreen').hidden = false;
+  document.getElementById('restartBtn').focus();
+}
+
+/* =====================================================================
+   SCORING & COMBOS
+   Every bonus goes through addBonus(). If you score again within
+   "comboWindow" seconds, the multiplier climbs: x2, x3, x4.
+   ===================================================================== */
+function addBonus(points, x, y, label) {
+  if (comboTimer > 0) comboCount = Math.min(SETTINGS.comboMax, comboCount + 1);
+  else comboCount = 1;
+  comboTimer = SETTINGS.comboWindow;
+
+  const doubled = player.doubleTime > 0 ? 2 : 1;
+  const total = points * comboCount * doubled;
+  bonus += total;
+  addText(x, y, (label ? label + ' ' : '') + '+' + total, '#ffe94a');
+}
+
+/* =====================================================================
+   VISUAL HELPERS: floating text, sparks, banners
+   ===================================================================== */
+function addText(x, y, text, color, size) {
+  texts.push({ x, y, text, color, size: size || 14, life: 1 });
+}
+
+function burst(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    const angle = rand(0, Math.PI * 2), speed = rand(60, 260);
+    particles.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+                     life: rand(0.3, 0.7), maxLife: 0.7, color, size: rand(1.5, 3.5) });
+  }
+}
+
+function showBanner(text, color) { banner = { text, color, life: 2.2 }; }
+
+/* =====================================================================
+   TIME FREEZE & DASH
+   ===================================================================== */
+function tryFreeze() {
+  if (freezeLeft > 0 || freezeCooldown > 0) return; // still active or recharging
+  freezeLeft = SETTINGS.freezeDuration;
+}
+
+function tryDash() {
+  if (player.dashCooldown > 0) return;
+  // Dash the way you're pressing, or the way you last moved if you're standing still.
+  const move = readMovement();
+  player.dashDX = move.dx || move.dy ? move.dx : player.lastDX;
+  player.dashDY = move.dx || move.dy ? move.dy : player.lastDY;
+  player.dashTime = SETTINGS.dashDuration;
+  player.dashCooldown = SETTINGS.dashCooldown;
+}
+
+const isDashing = () => player.dashTime > 0;
+
+/* =====================================================================
+   SPEEDS
+   Both you and the enemies speed up over time, but you speed up
+   a little faster, so a normal enemy can never outrun you.
+   ===================================================================== */
+function playerSpeedNow() {
+  return Math.min(SETTINGS.playerMaxSpeed, SETTINGS.playerStartSpeed + time * SETTINGS.playerSpeedGrowth);
+}
+function enemySpeedNow() {
+  return Math.min(SETTINGS.enemyMaxSpeed, SETTINGS.enemyStartSpeed + time * SETTINGS.enemySpeedGrowth);
+}
+
+/* =====================================================================
+   ENEMY TYPES
+   Each type has a size, health, color and how fast it is compared
+   to the "normal" enemy speed.
+   ===================================================================== */
+const ENEMY_TYPES = {
+  chaser:   { r: 13, hp: 1, speed: 1.0,  color: '#ff3fd0' }, // pink diamond: chases you
+  small:    { r: 8,  hp: 1, speed: 1.35, color: '#ff3fd0' }, // tiny fast chaser (from a splitter)
+  dasher:   { r: 13, hp: 1, speed: 0.7,  color: '#ff9b3f' }, // orange triangle: aims, then lunges
+  tank:     { r: 22, hp: 2, speed: 0.55, color: '#5dff8a' }, // big green hexagon: takes 2 hits
+  splitter: { r: 15, hp: 1, speed: 0.9,  color: '#b46bff' }, // purple square: splits in two
+  boss:     { r: 36, hp: SETTINGS.bossHealth, speed: 0.35, color: '#ff4f6d' },
+};
+// Only these types blow up when they bump into each other.
+const CRASHABLE = ['chaser', 'small', 'dasher', 'splitter'];
+
+function makeEnemy(type, x, y) {
+  const t = ENEMY_TYPES[type];
+  return {
+    type, x, y, r: t.r, hp: t.hp, color: t.color,
+    speedMul: t.speed * rand(0.85, 1.15), // each enemy is a little different
+    hitCooldown: 0, flash: 0, angle: 0, spin: 0,
+    phase: 'chase', phaseTime: 0, dashWait: rand(0.5, 1.5), // used by dashers
+    life: SETTINGS.bossLifetime, ringTimer: 2,             // used by the boss
+  };
+}
+
+function spawnEnemy() {
+  if (enemies.length >= SETTINGS.maxEnemies) return;
+  // Try a few edge spots and pick one that isn't right next to the player.
+  let p = randomEdgePoint();
+  for (let tries = 0; tries < 8 && distance(p, player) < 180; tries++) p = randomEdgePoint();
+
+  // Pick a random type from the ones unlocked so far.
+  const weights = { chaser: 3 };
+  if (time >= SETTINGS.unlockDasher) weights.dasher = 1.2;
+  if (time >= SETTINGS.unlockTank) weights.tank = 0.8;
+  if (time >= SETTINGS.unlockSplitter) weights.splitter = 1;
+  enemies.push(makeEnemy(weightedPick(weights), p.x, p.y));
+}
+
+function spawnBoss() {
+  const p = randomEdgePoint();
+  enemies.push(makeEnemy('boss', p.x, p.y));
+  showBanner('BOSS INCOMING', '#ff4f6d');
+}
+
+const bossAlive = () => enemies.some(e => e.type === 'boss' && !e.dead);
+
+// Called when an enemy runs out of health.
+function destroyEnemy(e, cause) {
+  if (e.dead) return;
+  e.dead = true;
+  burst(e.x, e.y, e.color, e.type === 'boss' ? 60 : 16);
+
+  if (cause === 'smash') addBonus(SETTINGS.pointsSmash, e.x, e.y);
+  if (cause === 'shock') addBonus(SETTINGS.pointsShockwave, e.x, e.y);
+
+  // Splitters break into two small fast chasers.
+  if (e.type === 'splitter') {
+    for (let i = 0; i < 2; i++) {
+      const s = makeEnemy('small', e.x + rand(-12, 12), e.y + rand(-12, 12));
+      s.hitCooldown = 0.4; // so a smash doesn't instantly destroy the new ones too
+      toSpawn.push(s);
+    }
+  }
+  // Beating the boss: big reward and a guaranteed power-up.
+  if (e.type === 'boss') {
+    addBonus(SETTINGS.pointsBoss, e.x, e.y, 'BOSS DOWN');
+    showBanner('BOSS DEFEATED', '#ffe94a');
+    spawnPowerup(e.x, e.y);
+  }
+}
+
+// Hit an enemy once. Big enemies need several hits.
+// hitCooldown stops one long touch from counting as many hits.
+function hitEnemy(e, cause) {
+  if (e.dead || e.hitCooldown > 0) return;
+  e.hp -= 1;
+  e.hitCooldown = e.type === 'boss' ? 0.5 : 0.3;
+  e.flash = 0.15;
+  if (e.hp <= 0) destroyEnemy(e, cause);
+  else burst(e.x, e.y, '#ffffff', 6);
+}
+
+// Enemies created during an update (splitter children) wait here,
+// then join the main list at the end of the frame.
+let toSpawn = [];
+
+/* =====================================================================
+   BULLETS & TURRETS
+   ===================================================================== */
+function spawnTurret() {
+  const p = randomEdgePoint();
+  turrets.push({ x: p.x, y: p.y, warning: SETTINGS.bulletWarning });
+}
+
+function addBullet(x, y, angle, speed) {
+  bullets.push({ x, y, r: SETTINGS.bulletRadius, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed });
+}
+
+function fireBullet(turret) {
+  // Aim at where the player is right now. The bullet then flies straight.
+  const angle = Math.atan2(player.y - turret.y, player.x - turret.x);
+  addBullet(turret.x, turret.y, angle, SETTINGS.bulletSpeed);
+}
+
+function fireRing(boss) {
+  const offset = rand(0, Math.PI * 2);
+  for (let i = 0; i < SETTINGS.bossRingBullets; i++) {
+    addBullet(boss.x, boss.y, offset + (i / SETTINGS.bossRingBullets) * Math.PI * 2, SETTINGS.bulletSpeed * 0.75);
+  }
+}
+
+/* =====================================================================
+   POWER-UPS
+   One appears at a random spot every 10-15 seconds. The kind is
+   random, but some are more likely depending on the situation.
+   ===================================================================== */
+const POWERUPS = {
+  shield: { color: '#3ff7ff', name: 'SHIELD' },
+  heart:  { color: '#ff3fd0', name: 'HEART' },
+  shock:  { color: '#ffffff', name: 'SHOCKWAVE' },
+  double: { color: '#ffe94a', name: 'DOUBLE POINTS' },
+  ghost:  { color: '#b46bff', name: 'GHOST' },
+  refill: { color: '#7fb8ff', name: 'FREEZE REFILL' },
+};
+
+function spawnPowerup(atX, atY) {
+  const weights = {
+    shield: player.shield ? 0.3 : 1,
+    heart: player.health < SETTINGS.maxHealth ? 1.3 : 0.3,
+    shock: enemies.length > 8 ? 1.6 : 0.8,
+    double: 1,
+    ghost: 0.9,
+    refill: freezeCooldown > 0 ? 1 : 0.3,
+  };
+  let x = atX, y = atY;
+  if (x === undefined) {
+    // A random spot away from the walls and not right on top of you.
+    for (let tries = 0; tries < 10; tries++) {
+      x = rand(arena.x + 60, arena.x + arena.w - 60);
+      y = rand(arena.y + 60, arena.y + arena.h - 60);
+      if (distance({ x, y }, player) > 150) break;
+    }
+  }
+  powerups = [{ kind: weightedPick(weights), x, y, r: 14, life: SETTINGS.powerupLifetime }];
+}
+
+function applyPowerup(p) {
+  const info = POWERUPS[p.kind];
+  addText(p.x, p.y - 20, info.name + '!', info.color, 18);
+  burst(p.x, p.y, info.color, 20);
+
+  if (p.kind === 'shield') player.shield = true;
+  if (p.kind === 'heart') {
+    if (player.health < SETTINGS.maxHealth) player.health += 1;
+    else addBonus(SETTINGS.pointsFullHeart, p.x, p.y);
+  }
+  if (p.kind === 'double') player.doubleTime = SETTINGS.doublePointsTime;
+  if (p.kind === 'ghost') player.ghostTime = SETTINGS.ghostTime;
+  if (p.kind === 'refill') { freezeCooldown = 0; }
+  if (p.kind === 'shock') shockwave();
+}
+
+// Destroys everything close to you.
+function shockwave() {
+  const R = SETTINGS.shockwaveRadius;
+  rings.push({ x: player.x, y: player.y, r: 0, max: R, life: 0.4 });
+  bullets = bullets.filter(b => distance(b, player) > R);
+  turrets = turrets.filter(t => distance(t, player) > R);
+  for (const e of enemies) {
+    if (distance(e, player) <= R + e.r) {
+      e.hitCooldown = 0;   // a shockwave always lands
+      hitEnemy(e, 'shock');
+    }
+  }
+}
+
+/* =====================================================================
+   UPDATE: move everything forward by "dt" seconds.
+   Runs about 60 times a second while playing.
+   ===================================================================== */
+function update(dt) {
+  time += dt;
+  const frozen = freezeLeft > 0;
+  timeScore += dt * SETTINGS.pointsPerSecond * (player.doubleTime > 0 ? 2 : 1);
+
+  // --- Timers that always run ---
+  if (frozen) {
+    freezeLeft -= dt;
+    if (freezeLeft <= 0) { freezeLeft = 0; freezeCooldown = SETTINGS.freezeCooldown; }
+  } else if (freezeCooldown > 0) {
+    freezeCooldown = Math.max(0, freezeCooldown - dt);
+  }
+  if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) comboCount = 1; }
+  player.invulnerable = Math.max(0, player.invulnerable - dt);
+  player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+  player.ghostTime = Math.max(0, player.ghostTime - dt);
+  player.doubleTime = Math.max(0, player.doubleTime - dt);
+  for (const e of enemies) { e.hitCooldown = Math.max(0, e.hitCooldown - dt); e.flash = Math.max(0, e.flash - dt); }
+
+  // --- Announce new enemy types the first time they unlock ---
+  const unlocks = [['dasher', SETTINGS.unlockDasher, 'NEW: DASHER', '#ff9b3f'],
+                   ['tank', SETTINGS.unlockTank, 'NEW: TANK', '#5dff8a'],
+                   ['splitter', SETTINGS.unlockSplitter, 'NEW: SPLITTER', '#b46bff']];
+  for (const [type, at, text, color] of unlocks) {
+    if (time >= at && !announced[type]) { announced[type] = true; showBanner(text, color); }
+  }
+
+  // --- Player (always moves, even when frozen) ---
+  const move = readMovement();
+  if (move.dx || move.dy) { player.lastDX = move.dx; player.lastDY = move.dy; }
+  if (isDashing()) {
+    player.dashTime -= dt;
+    const speed = playerSpeedNow() * SETTINGS.dashSpeedMultiplier;
+    player.x += player.dashDX * speed * dt;
+    player.y += player.dashDY * speed * dt;
+    afterimages.push({ x: player.x, y: player.y, life: 0.25 });
+  } else {
+    player.x += move.dx * playerSpeedNow() * dt;
+    player.y += move.dy * playerSpeedNow() * dt;
+  }
+  keepInside(player);
+
+  // --- Power-up spawning and pickup (also works while frozen) ---
+  powerupTimer -= dt;
+  if (powerupTimer <= 0) {
+    if (powerups.length === 0) spawnPowerup();
+    powerupTimer = rand(SETTINGS.powerupMinWait, SETTINGS.powerupMaxWait);
+  }
+  for (const p of powerups) {
+    p.life -= dt;
+    if (touching(player, p)) { p.life = 0; applyPowerup(p); }
+  }
+  powerups = powerups.filter(p => p.life > 0);
+
+  // --- Everything below stops while time is frozen ---
+  if (!frozen) {
+    // Boss: arrives every "bossEvery" seconds
+    if (time >= nextBossAt) {
+      if (!bossAlive()) spawnBoss();
+      nextBossAt += SETTINGS.bossEvery;
+    }
+    const bossHere = bossAlive();
+
+    // Spawn timers (normal spawning pauses while the boss is here)
+    if (!bossHere) {
+      enemyTimer -= dt;
+      if (enemyTimer <= 0) {
+        spawnEnemy();
+        enemyTimer = Math.max(SETTINGS.enemySpawnMin, SETTINGS.enemySpawnStart - time * 0.02);
+      }
+      bulletTimer -= dt;
+      if (bulletTimer <= 0) {
+        spawnTurret();
+        bulletTimer = Math.max(SETTINGS.bulletSpawnMin, SETTINGS.bulletSpawnStart - time * 0.02);
+      }
+    }
+
+    // Turrets blink, then fire
+    for (const t of turrets) {
+      t.warning -= dt;
+      if (t.warning <= 0) fireBullet(t);
+    }
+    turrets = turrets.filter(t => t.warning > 0);
+
+    // Move each enemy according to its type
+    for (const e of enemies) moveEnemy(e, dt);
+
+    // Bullets fly straight; remove them once they leave the arena
+    for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
+    bullets = bullets.filter(b =>
+      b.x > arena.x - 20 && b.x < arena.x + arena.w + 20 &&
+      b.y > arena.y - 20 && b.y < arena.y + arena.h + 20);
+
+    // Small enemies that crash into each other are both destroyed (bonus points!)
+    for (let i = 0; i < enemies.length; i++) {
+      for (let j = i + 1; j < enemies.length; j++) {
+        const a = enemies[i], b = enemies[j];
+        if (a.dead || b.dead || !CRASHABLE.includes(a.type) || !CRASHABLE.includes(b.type)) continue;
+        if (distance(a, b) < (a.r + b.r) * 0.7) {
+          destroyEnemy(a, 'crash');
+          destroyEnemy(b, 'crash');
+          addBonus(SETTINGS.pointsEnemyCrash * 2, (a.x + b.x) / 2, (a.y + b.y) / 2, 'CRASH');
+        }
+      }
+    }
+
+    // Near misses: a bullet came very close, never touched you, and is now moving away
+    for (const b of bullets) {
+      const gap = distance(b, player) - player.r - b.r;
+      if (gap < SETTINGS.nearMissGap && gap > 0) b.close = true;
+      if (b.close && !b.touched && !b.rewarded && gap > SETTINGS.nearMissGap) {
+        b.rewarded = true;
+        addBonus(SETTINGS.pointsNearMiss, player.x, player.y - 24, 'CLOSE!');
+      }
+    }
+  }
+
+  // --- Player touching enemies ---
+  for (const e of enemies) {
+    if (e.dead || !touching(player, e)) continue;
+    if (frozen) {
+      hitEnemy(e, 'smash');                    // frozen enemies are harmless: smash them!
+    } else if (isDashing() || player.ghostTime > 0) {
+      // dashing or ghost: pass right through
+    } else if (e.type === 'tank' || e.type === 'boss') {
+      hurtPlayer();
+      knockBack(e);                            // big enemies survive and shove you away
+    } else {
+      e.dead = true;                           // small enemies die when they hit you
+      burst(e.x, e.y, e.color, 10);
+      hurtPlayer();
+    }
+  }
+
+  // --- Player touching bullets ---
+  for (const b of bullets) {
+    if (b.dead || !touching(player, b)) continue;
+    b.touched = true;
+    if (frozen) { b.dead = true; burst(b.x, b.y, '#7fb8ff', 5); }
+    else if (!isDashing()) { b.dead = true; hurtPlayer(); }
+  }
+
+  enemies = enemies.filter(e => !e.dead).concat(toSpawn);
+  toSpawn = [];
+  bullets = bullets.filter(b => !b.dead);
+
+  updateEffects(dt);
+
+  if (player.health <= 0) gameOver();
+}
+
+// How each enemy type moves.
+function moveEnemy(e, dt) {
+  const speed = enemySpeedNow() * e.speedMul;
+  const toPlayer = Math.atan2(player.y - e.y, player.x - e.x);
+  e.spin += dt * 2;
+
+  if (e.type === 'dasher') {
+    // Dashers: chase slowly -> stop and aim (flashing) -> lunge in a straight line
+    if (e.phase === 'chase') {
+      e.angle = toPlayer;
+      e.dashWait -= dt;
+      if (e.dashWait <= 0 && distance(e, player) < 320) { e.phase = 'aim'; e.phaseTime = 0.6; }
+    } else if (e.phase === 'aim') {
+      e.angle = toPlayer;
+      e.phaseTime -= dt;
+      if (e.phaseTime <= 0) { e.phase = 'lunge'; e.phaseTime = 0.45; }
+      return; // stands still while aiming
+    } else if (e.phase === 'lunge') {
+      e.phaseTime -= dt;
+      e.x += Math.cos(e.angle) * speed * 4.5 * dt;
+      e.y += Math.sin(e.angle) * speed * 4.5 * dt;
+      keepInside(e);
+      if (e.phaseTime <= 0) { e.phase = 'chase'; e.dashWait = rand(1.2, 2); }
+      return;
+    }
+  }
+
+  if (e.type === 'boss') {
+    e.life -= dt;
+    e.ringTimer -= dt;
+    if (e.ringTimer <= 0) { fireRing(e); e.ringTimer = SETTINGS.bossRingEvery; }
+    if (e.life <= 0) { e.dead = true; showBanner('THE BOSS ESCAPED', '#7c86a8'); return; }
+  }
+
+  // Everyone else (and dashers in "chase" mode): step toward the player
+  e.x += Math.cos(toPlayer) * speed * dt;
+  e.y += Math.sin(toPlayer) * speed * dt;
+  if (e.type === 'boss') keepInside(e);
+}
+
+function knockBack(e) {
+  const angle = Math.atan2(player.y - e.y, player.x - e.x);
+  player.x += Math.cos(angle) * 45;
+  player.y += Math.sin(angle) * 45;
+  keepInside(player);
+}
+
+function hurtPlayer() {
+  if (player.invulnerable > 0) return;
+  if (player.shield) {
+    // The shield takes the hit instead of you.
+    player.shield = false;
+    player.invulnerable = 0.6;
+    addText(player.x, player.y - 24, 'BLOCKED', '#3ff7ff', 16);
+    burst(player.x, player.y, '#3ff7ff', 18);
+    return;
+  }
+  player.health -= 1;
+  player.invulnerable = SETTINGS.invulnerableTime;
+  burst(player.x, player.y, '#ff3fd0', 20);
+}
+
+// Sparks, popups, rings and banners keep animating even while frozen.
+function updateEffects(dt) {
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 40 * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+  for (const r of rings) { r.life -= dt; r.r = r.max * (1 - r.life / 0.4); }
+  rings = rings.filter(r => r.life > 0);
+  for (const a of afterimages) a.life -= dt;
+  afterimages = afterimages.filter(a => a.life > 0);
+  if (banner) { banner.life -= dt; if (banner.life <= 0) banner = null; }
+}
+
+/* =====================================================================
+   DRAW: paint the current moment onto the canvas.
+   ===================================================================== */
+function glowCircle(x, y, r, color, blur) {
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Draws a regular shape (triangle, square, hexagon...) centered on x, y.
+function polygon(x, y, r, sides, rotation) {
+  ctx.beginPath();
+  for (let i = 0; i < sides; i++) {
+    const a = rotation + (i / sides) * Math.PI * 2;
+    if (i === 0) ctx.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+    else ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+  }
+  ctx.closePath();
+}
+
+function drawEnemy(e, frozen, now) {
+  let color = frozen ? '#7fb8ff' : e.color;
+  if (e.flash > 0) color = '#ffffff';
+  if (e.type === 'dasher' && e.phase === 'aim' && Math.floor(now / 70) % 2 === 0) color = '#ffffff';
+  ctx.shadowColor = color; ctx.shadowBlur = 18; ctx.fillStyle = color; ctx.strokeStyle = color;
+
+  if (e.type === 'chaser' || e.type === 'small') { polygon(e.x, e.y, e.r, 4, -Math.PI / 2); ctx.fill(); }
+  if (e.type === 'dasher') { polygon(e.x, e.y, e.r + 2, 3, e.angle); ctx.fill(); }
+  if (e.type === 'splitter') { polygon(e.x, e.y, e.r, 4, e.spin); ctx.fill(); }
+  if (e.type === 'tank') {
+    polygon(e.x, e.y, e.r, 6, 0);
+    ctx.lineWidth = 4; ctx.stroke();
+    if (e.hp > 1) { polygon(e.x, e.y, e.r * 0.5, 6, 0); ctx.fill(); } // solid core = full health
+  }
+  if (e.type === 'boss') {
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2); ctx.stroke();
+    polygon(e.x, e.y, e.r * 0.6, 8, e.spin); ctx.fill();
+    // Health bar above the boss
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#2a2440'; ctx.fillRect(e.x - 40, e.y - e.r - 16, 80, 6);
+    ctx.fillStyle = '#ff4f6d'; ctx.fillRect(e.x - 40, e.y - e.r - 16, 80 * (e.hp / SETTINGS.bossHealth), 6);
+  }
+}
+
+function drawPowerup(p, now) {
+  if (p.life < 2 && Math.floor(now / 100) % 2 === 0) return; // blink when about to vanish
+  const info = POWERUPS[p.kind];
+  const pulse = 1 + Math.sin(now / 150) * 0.12;
+  ctx.shadowColor = info.color; ctx.shadowBlur = 20; ctx.strokeStyle = info.color; ctx.fillStyle = info.color;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2); ctx.stroke();
+
+  // A small symbol inside so you can tell them apart
+  ctx.lineWidth = 2;
+  if (p.kind === 'shield') { ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke(); }
+  if (p.kind === 'shock') {
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4;
+      ctx.moveTo(p.x + Math.cos(a) * 3, p.y + Math.sin(a) * 3);
+      ctx.lineTo(p.x + Math.cos(a) * 8, p.y + Math.sin(a) * 8);
+    }
+    ctx.stroke();
+  }
+  if (p.kind === 'ghost') { ctx.globalAlpha = 0.5; glowCircle(p.x, p.y, 6, info.color, 0); ctx.globalAlpha = 1; }
+  if (p.kind === 'heart' || p.kind === 'double' || p.kind === 'refill') {
+    ctx.shadowBlur = 0;
+    ctx.font = 'bold 13px "Segoe UI Symbol", Consolas, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(p.kind === 'heart' ? '♥' : p.kind === 'double' ? '×2' : '❄', p.x, p.y + 1);
+  }
+}
+
+function draw(now) {
+  // 1. Wipe the canvas with the background color
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#05040f';
+  ctx.fillRect(0, 0, W, H);
+
+  // 2. Faint grid inside the arena
+  ctx.strokeStyle = 'rgba(80, 90, 180, 0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let x = arena.x; x <= arena.x + arena.w; x += 40) { ctx.moveTo(x, arena.y); ctx.lineTo(x, arena.y + arena.h); }
+  for (let y = arena.y; y <= arena.y + arena.h; y += 40) { ctx.moveTo(arena.x, y); ctx.lineTo(arena.x + arena.w, y); }
+  ctx.stroke();
+
+  // 3. Glowing arena border
+  const frozen = freezeLeft > 0;
+  ctx.strokeStyle = frozen ? '#7fb8ff' : '#3ff7ff';
+  ctx.shadowColor = ctx.strokeStyle;
+  ctx.shadowBlur = 16;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(arena.x, arena.y, arena.w, arena.h);
+
+  if (state === 'start' || !player) { ctx.shadowBlur = 0; return; }
+
+  // 4. Power-ups
+  for (const p of powerups) drawPowerup(p, now);
+
+  // 5. Turret warnings: blinking yellow rings
+  for (const t of turrets) {
+    if (Math.floor(now / 80) % 2 === 0) {
+      ctx.strokeStyle = '#ffe94a'; ctx.shadowColor = '#ffe94a'; ctx.shadowBlur = 12; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(t.x, t.y, 10, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  // 6. Shockwave rings
+  for (const r of rings) {
+    ctx.globalAlpha = r.life / 0.4;
+    ctx.strokeStyle = '#ffffff'; ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 24; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 7. Sparks
+  ctx.shadowBlur = 0;
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  // 8. Enemies and bullets
+  for (const e of enemies) drawEnemy(e, frozen, now);
+  for (const b of bullets) glowCircle(b.x, b.y, b.r, frozen ? '#7fb8ff' : '#ffe94a', 14);
+
+  // 9. Dash afterimages
+  for (const a of afterimages) {
+    ctx.globalAlpha = a.life / 0.25 * 0.5;
+    glowCircle(a.x, a.y, player.r, '#3ff7ff', 10);
+  }
+  ctx.globalAlpha = 1;
+
+  // 10. Player (blinks while invulnerable, see-through while ghost)
+  const blinking = player.invulnerable > 0 && Math.floor(now / 90) % 2 === 0;
+  if (!blinking) {
+    if (player.ghostTime > 0) ctx.globalAlpha = 0.45;
+    glowCircle(player.x, player.y, player.r, player.ghostTime > 0 ? '#b46bff' : '#3ff7ff', 24);
+    glowCircle(player.x, player.y, player.r * 0.45, '#ffffff', 0);
+    ctx.globalAlpha = 1;
+  }
+  if (player.shield) {
+    ctx.strokeStyle = '#3ff7ff'; ctx.shadowColor = '#3ff7ff'; ctx.shadowBlur = 16; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8 + Math.sin(now / 120) * 1.5, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // 11. Floating text
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const t of texts) {
+    ctx.globalAlpha = Math.max(0, t.life);
+    ctx.fillStyle = t.color;
+    ctx.font = `bold ${t.size}px Consolas, monospace`;
+    ctx.fillText(t.text, t.x, t.y);
+  }
+  ctx.globalAlpha = 1;
+
+  // 12. Banner in the middle of the arena
+  if (banner) {
+    ctx.globalAlpha = Math.min(1, banner.life);
+    ctx.fillStyle = banner.color; ctx.shadowColor = banner.color; ctx.shadowBlur = 24;
+    ctx.font = 'bold 40px Consolas, monospace';
+    ctx.fillText(banner.text, arena.x + arena.w / 2, arena.y + arena.h * 0.3);
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
+
+  // 13. Blue tint over the whole screen while frozen
+  if (frozen) {
+    ctx.fillStyle = 'rgba(70, 120, 255, 0.10)';
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+/* =====================================================================
+   HUD: copy the numbers into the info bar at the top.
+   ===================================================================== */
+const el = (id) => document.getElementById(id);
+function setHtml(id, html) { if (el(id).innerHTML !== html) el(id).innerHTML = html; } // only touch the page if it changed
+
+function updateHud() {
+  if (!player) return;
+  el('time').textContent = time.toFixed(1) + 's';
+  el('score').textContent = score();
+  el('best').textContent = Math.max(best, score());
+
+  let hearts = '';
+  for (let i = 0; i < SETTINGS.maxHealth; i++) hearts += i < player.health ? '♥' : '<span class="lost">♥</span>';
+  setHtml('hearts', hearts);
+
+  // Freeze meter: drains while active, refills while recharging
+  let fill, label;
+  if (freezeLeft > 0) { fill = freezeLeft / SETTINGS.freezeDuration; label = 'Frozen!'; }
+  else if (freezeCooldown > 0) { fill = 1 - freezeCooldown / SETTINGS.freezeCooldown; label = 'Freeze ' + freezeCooldown.toFixed(1) + 's'; }
+  else { fill = 1; label = 'Freeze [Space]'; }
+  el('freezeFill').style.width = (fill * 100) + '%';
+  el('freezeLabel').textContent = label;
+  el('freezeBox').classList.toggle('ready', freezeLeft === 0 && freezeCooldown === 0);
+
+  // Dash meter
+  const dashFill = 1 - player.dashCooldown / SETTINGS.dashCooldown;
+  el('dashFill').style.width = (dashFill * 100) + '%';
+  el('dashLabel').textContent = player.dashCooldown > 0 ? 'Dash ' + player.dashCooldown.toFixed(1) + 's' : 'Dash [Shift]';
+  el('dashBox').classList.toggle('ready', player.dashCooldown === 0);
+
+  // Combo and active power-ups
+  setHtml('combo', comboCount > 1 ? 'COMBO ×' + comboCount : '');
+  let fx = '';
+  if (player.shield) fx += '<span class="effect" style="color:#3ff7ff">Shield</span>';
+  if (player.doubleTime > 0) fx += `<span class="effect" style="color:#ffe94a">×2 ${Math.ceil(player.doubleTime)}s</span>`;
+  if (player.ghostTime > 0) fx += `<span class="effect" style="color:#b46bff">Ghost ${Math.ceil(player.ghostTime)}s</span>`;
+  setHtml('effects', fx);
+}
+
+/* =====================================================================
+   MAIN LOOP
+   requestAnimationFrame asks the browser to call "loop" before the
+   next screen refresh (about 60 times a second).
+   "dt" = how many seconds passed since the last frame.
+   ===================================================================== */
+let lastTime = performance.now();
+function loop(now) {
+  // Cap dt so switching tabs and coming back doesn't teleport everything.
+  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+
+  if (state === 'playing') update(dt);
+  draw(now);
+  updateHud();
+  requestAnimationFrame(loop);
+}
+
+/* ---------- Buttons & first launch ---------- */
+el('playBtn').addEventListener('click', startGame);
+el('restartBtn').addEventListener('click', startGame);
+el('startBest').textContent = best;
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
