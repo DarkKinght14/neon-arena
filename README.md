@@ -4,7 +4,13 @@ A neon arcade survival game that runs in any desktop browser. It's one HTML file
 
 ## Play
 
-Double-click `index.html` to open it in Chrome, Edge or Firefox.
+**Online / on a phone:** https://darkkinght14.github.io/neon-arena/
+
+**Install on iPhone (works offline afterwards):** open the link in **Safari**, tap **Share → Add to Home Screen**, then launch it from the new icon. After the first launch it works with no internet.
+
+**On a computer:** double-click `index.html` to open it in Chrome, Edge or Firefox.
+
+**Touch controls:** drag anywhere to move, and use the **DASH** and **FREEZE** buttons. **II** pauses.
 
 | Key | Action |
 |---|---|
@@ -13,6 +19,7 @@ Double-click `index.html` to open it in Chrome, Edge or Firefox.
 | Space | Freeze enemies and bullets for 2 seconds |
 | Enter | Restart after game over |
 | M | Mute or unmute sound |
+| P / Esc | Pause |
 
 ## Features
 

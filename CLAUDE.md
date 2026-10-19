@@ -7,8 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Neon Arena is a neon arcade survival game in a single file, `index.html`, holding the HTML, CSS and JS. The user is a beginner and builds it in stages, with a plain-language explanation after each one.
 
 Hard constraints:
-- It must stay **one file** that works **offline**. That means no external fonts, libraries, CDNs, images or audio files. Sound is generated with the Web Audio API.
-- The target is a **desktop browser with a keyboard** (WASD/arrows, Shift, Space, Enter).
+- All game code stays in **one file** that works **offline**. That means no external fonts, libraries, CDNs, images or audio files. Sound is generated with the Web Audio API. Opening `index.html` directly from disk must keep working.
+- It's an installable **PWA** hosted on **GitHub Pages** (https://darkkinght14.github.io/neon-arena/), deployed automatically from `main` at the repo root. The user installs it on an iPhone via Safari → Add to Home Screen and plays offline. The PWA wrapper files are `manifest.webmanifest`, `sw.js`, `icons/` and `.nojekyll`. **If you add any file the game needs at runtime, add it to `FILES` in `sw.js`**, or it won't be available offline. `sw.js` is network-first, so updates reach installed copies without bumping `CACHE`.
+- It supports **both desktop keyboard and touch** (iPhone, portrait and landscape). Test changes at phone sizes too (e.g. 390×844 and 844×390).
 - Comments are written for a beginner. Match the existing tone and the `/* ===== SECTION ===== */` headers.
 
 ## Version control (required)
@@ -23,7 +24,7 @@ Commit and push to GitHub **regularly as you work**, not only at the end. The go
 
 ## Commands
 
-There's no build, package manager or test suite. To run it, open `index.html` in a browser.
+There's no build, package manager or test suite. To run it, open `index.html` in a browser. Every push to `main` redeploys GitHub Pages within about a minute. Check it with `gh api repos/DarkKinght14/neon-arena/pages --jq .status` (it should say `built`).
 
 To syntax-check the script (Node is installed):
 ```powershell
@@ -50,4 +51,6 @@ Git: if `git` isn't on PATH, it's at `C:\Program Files\Git\cmd`. The GitHub CLI 
 - **Challenges:** `challenge` holds one of the keys of `CHALLENGES`, or `null` for the first 10s. `startChallenge()` rotates it every `challengeEvery` seconds and never repeats the same one twice in a row. Effects are checked inline wherever they apply: `readMovement()` (reversed), `moveEnemy()` (fast), the turret timer (storm), and the inset step in `update()` (shrink).
 - **Effects:** `burst()` makes particles, `addText()` floating popups, `showBanner()` the queued center messages (`banners`) and `addShake()` the screen shake. Shake is applied as a translate inside `ctx.save()`/`restore()` in `draw()` and decays in `loop()`. Trails come from `pushTrail()` every frame (`obj.trail`) and are drawn with the `'lighter'` blend mode.
 - **Sound:** `initAudio()` creates the AudioContext, and must run from a user gesture (it's called from `startGame()` and the mute button). Every sound is a recipe in `SOUNDS` made from `tone()`/`noise()`. Play them through `playSound(name)`, which handles mute and throttles repeats to one per 45ms.
+- **Touch & phones:** `body.touch` is set on touch devices. CSS uses `.touch-only` / `.key-only` to switch hints and controls. The joystick (`stick`) is canvas pointer events (non-mouse) that feed `readMovement()` as an analog vector. `dashBtn`/`freezeBtn`/`pauseBtn` act on `pointerdown`. `resize()` places `baseArena` below the HUD's measured bottom (a `ResizeObserver` re-runs it when the HUD wraps) and inside the iPhone safe areas, read from the hidden `#safeProbe` element. `worldScale()` (0.6–1) shrinks speeds, the shockwave radius and the enemy cap on small screens.
+- **Pause:** `state === 'paused'` (P/Esc, the II button, or automatically on `visibilitychange`). Anything that runs only while playing must check `state === 'playing'`.
 - **Persistence:** `localStorage` keys are `neonArena.best` (high score) and `neonArena.muted`, and every access is wrapped in try/catch.
